@@ -52,15 +52,16 @@ On a development machine, use the `dsh plugin` command directly.
 dsh plugin --profile web add <plugin directory>
 ```
 
-`<plugin directory>` is the directory that contains `package.json`. A relative
-path works, but it **must start with `./` or `../`**.
+`<plugin directory>` is the directory that contains `package.json`. After cloning
+it is called `dsh-fathomkernel`. A relative path works, but it **must start with
+`./` or `../`**.
 
 The path may carry a `file:` or `link:` prefix:
 
 ```bash
-dsh plugin --profile web add ./fathomkernel-plugin
-dsh plugin --profile web add file:./fathomkernel-plugin
-dsh plugin --profile web add link:./fathomkernel-plugin
+dsh plugin --profile web add ./dsh-fathomkernel
+dsh plugin --profile web add file:./dsh-fathomkernel
+dsh plugin --profile web add link:./dsh-fathomkernel
 ```
 
 - `file:` — **copies** the source into `node_modules`; code changes need a
@@ -72,79 +73,60 @@ dsh plugin --profile web add link:./fathomkernel-plugin
 For development the default `link:` is the least friction. When the change is in
 the page half (`client.js`), refreshing the page is enough — no restart.
 
-**Uninstall**:
+> **To let the plugin hand files back, allow recursion first.** With an `agent`
+> proposer the plugin delegates to a subagent that explores and returns code. If
+> the Host's *subagents → maximum recursion depth* is `0` (disabled) or `1`
+> (main Agent only), the delegation is refused and that round fails outright. Go
+> to **Settings → Plugins → Subagents → Run limits** and set **maximum recursion
+> depth to `2`**, then save:
+>
+> ![Maximum recursion depth set to 2](docs/plugin-agent-depth.png)
+>
+> The parallel subagent limit can follow the core count; `8` is ample on a 4-core
+> machine.
+
+After installing, **restart the Host**, then **refresh the browser page** to load
+the page half. A **FathomKernel** section appears in the Settings sidebar:
+
+![The FathomKernel panel in Settings](docs/setting-fathomkernel.png)
+
+The panel holds the goal selector, pause/resume, open report, view best source,
+and the round count, baseline, current best, speedup and milestone verdict. It is
+**deliberately read-mostly**: creating, running and resuming happen in the
+conversation; the only action the page offers is pause.
+
+### Uninstall
+
+When you are actually done with it:
 
 ```bash
 dsh plugin --profile web remove @local/dsh-fathomkernel
 ```
 
-After installing, **restart the Host**, then **refresh the browser page** to load
-the page half. A **FathomKernel** section appears in Settings.
+The knowledge base and goals under `~/.dsh/fathomkernel` are a separate directory;
+uninstalling does not delete them. Remove that directory yourself to wipe
+everything.
 
 ---
 
 ## Three steps
 
-### Step 1: prepare the task directory
+All of it is done by talking. What follows is one real session.
 
-The plugin looks in exactly one place: **`task/` inside the session working
-directory**, that is `<session working directory>/task/`. All task files live
-there.
+### Step 1: say what you want
 
-**This step can be left to the Agent.** Just say "I want to optimize X" and the
-Agent will create `task/`, write a runnable but slow baseline implementation,
-pair it with a correctness and a benchmark command, and then create the goal. The
-three files below are what it should end up with — glance at them and you will
-know whether it got it right.
+![Starting from one sentence](docs/fathomkernel-chat-prompt.png)
 
-```text
-demo/
-└── task/
-    ├── kernel.js      ← the implementation to optimize
-    ├── check.js       ← correctness: exit code 0 means correct
-    └── bench.js       ← benchmark: prints the metric
-```
+Open a session and just say it — the screenshot shows "write C to optimize
+multiplying two 512×512 matrices". Once you have said it, let go: the Agent
+inspects the environment, runs `fk_doctor` to confirm the plugin is ready, builds
+the **baseline implementation + correctness command + benchmark command**, puts
+them under `task/` in the session working directory, and creates the goal.
 
-`kernel.js` — start with a **straightforward, correct, slow** version. It is the
-baseline:
-
-```js
-function sumSquares(values) {
-  let total = 0
-  for (let index = 0; index < values.length; index += 1) {
-    total += values[index] * values[index]
-  }
-  return total
-}
-module.exports = { sumSquares }
-```
-
-`check.js` — exit code 0 when correct:
-
-```js
-const { sumSquares } = require('./kernel.js')
-if (sumSquares([1, 2, 3, 4, 5]) !== 55) process.exit(1)
-```
-
-`bench.js` — the benchmark, printing one JSON object on its **last line**:
-
-```js
-const { sumSquares } = require('./kernel.js')
-const values = new Float64Array(1 << 20).fill(1.5)
-sumSquares(values)
-const started = process.hrtime.bigint()
-for (let round = 0; round < 20; round += 1) sumSquares(values)
-const ms = Number(process.hrtime.bigint() - started) / 1e6 / 20
-console.log(JSON.stringify({ latency_ms: ms }))
-```
-
-> C, Python, Rust or your own build script all work — just swap the three
-> commands for the equivalent ones.
-
-#### If the Agent writes them, check these three things
-
-The plugin only **measures**; it does not judge whether the benchmark you gave it
-is any good. When the Agent writes these files, it pays to look at:
+The plugin looks in exactly one place, `<session working directory>/task/`, and
+the directory name is fixed. Usually you need not touch it — but it is worth a
+glance, because **the plugin only measures; it does not judge whether the
+benchmark is any good**:
 
 | What to check | What counts as wrong |
 |---|---|
@@ -152,52 +134,35 @@ is any good. When the Agent writes these files, it pays to look at:
 | **The check really checks** | Only one or two tiny inputs, or comparing lengths only — a broken implementation passes |
 | **The benchmark really measures** | A timer too short (a few microseconds), no warm-up, or the result never actually used — what you get is noise or an idle loop |
 
-### Step 2: tell the Agent what to optimize
+C, Python, Rust or your own build script all work — just swap the three commands
+for the equivalent ones.
 
-Open a session one level above `demo/` and just say:
-
-> Optimize the sum of squares in demo with FathomKernel; the goal is twice as fast.
-
-The Agent will call `fk_goal` to fill this in:
-
-```text
-fk_goal action=create
-  name="sum of squares"
-  workdir=demo
-  spec.language=javascript
-  spec.entry=kernel.js
-  spec.correctness="node check.js"
-  spec.benchmark="node bench.js"
-  spec.metric={"name":"latency_ms","path":"latency_ms","unit":"ms"}
-  spec.target={"kind":"speedup","value":2}
-```
-
-Creating it immediately runs the baseline once and records it:
-
-```text
-Milestone ladder: m0 → m1 → m2 → m3 → m4 → m5
-Baseline: 1.817 ms
-```
-
-The `2` in `target` means **twice as fast**. You do not have to type any of
-these parameters, but knowing they exist helps you phrase the request precisely.
-
-### Step 3: let it run
+### Step 2: let it run
 
 > Start it, and tell me when it is done.
 
 The Agent calls `fk_run`, which starts in the background and returns immediately.
-Ask about progress any time and the Agent will use `fk_status` to show which rung
-the ladder reached and what the current best is. Say stop to stop.
+Every round after that is a complete lap: pick a kind of change → look up past
+experience → propose a new version → **really compile, really check, measure
+repeatedly and take the median** → replace the current best only when it is correct
+*and* measurably faster.
 
-Progress reads off this ladder:
+Progress reads off this ladder; reaching **m4** means the goal is met and `m5` means
+it is still pushing further:
 
 ```text
 m0 compiles → m1 correct → m2 baseline → m3 meaningful gain → m4 target → m5 beyond target
 ```
 
-Reaching **m4** means the goal you set has been met. `m5` means it is still
-pushing further.
+### Step 3: look at the result
+
+![A hand-written candidate accepted by measurement, then the autonomous loop starts](docs/fathomkernel-chat.png)
+
+This is the rest of that same session: the Agent wrote a fast version itself and
+submitted it, the plugin really compiled, really checked and really measured it,
+**accepting 5.18 ms against a 23.6 ms baseline (4.56×)** as the new best, and then
+started the autonomous loop to keep going. You do none of this by hand — ask about
+progress any time, say stop to stop.
 
 ---
 
@@ -337,7 +302,8 @@ When nothing needs changing, leave the key out.
 
 ## Dashboard
 
-The **FathomKernel** section in Settings is the dashboard for this loop:
+The **FathomKernel** section in Settings is the dashboard for this loop — the
+screenshot after the install steps above is exactly it:
 
 - a goal selector;
 - the milestone ladder (which rung it reached);
@@ -347,7 +313,7 @@ The **FathomKernel** section in Settings is the dashboard for this loop:
 - a browsable knowledge base.
 
 The dashboard is **deliberately read-mostly**. The engine owns the loop; the page
-only presents the facts that were measured. Its only clickable action is "stop" —
+only presents the facts that were measured. Its only clickable action is "pause" —
 creating, running, resuming and writing knowledge all happen through the tools in
 the conversation.
 

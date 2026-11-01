@@ -41,14 +41,14 @@
 dsh plugin --profile web add <插件所在目录>
 ```
 
-`<插件所在目录>` 是含有 `package.json` 的那个目录。可以写相对路径，但**必须以 `./` 或 `../` 开头**。
+`<插件所在目录>` 是含有 `package.json` 的那个目录。克隆下来之后它叫 `dsh-fathomkernel`。可以写相对路径，但**必须以 `./` 或 `../` 开头**。
 
 安装时路径前面可以带 `file:` 或 `link:` 前缀：
 
 ```bash
-dsh plugin --profile web add ./fathomkernel-plugin
-dsh plugin --profile web add file:./fathomkernel-plugin
-dsh plugin --profile web add link:./fathomkernel-plugin
+dsh plugin --profile web add ./dsh-fathomkernel
+dsh plugin --profile web add file:./dsh-fathomkernel
+dsh plugin --profile web add link:./dsh-fathomkernel
 ```
 
 - `file:` —— 把源码**复制**一份到 `node_modules`，改了代码要重新安装才生效；
@@ -57,69 +57,41 @@ dsh plugin --profile web add link:./fathomkernel-plugin
 
 开发时用默认的 `link:` 最省事。改的是界面部分（`client.js`）时，刷新页面就够，不用重启。
 
-**卸载**：
+> **要求插件把文件交回来，得先开递归。** 用 `agent` 型 proposer 时，插件会派一个子智能体去探索并交回代码；如果 Host 的「子智能体 → 最大递归深度」是 `0`（禁用）或 `1`（只许主 Agent 创建），这次派单会被拒绝，那一轮直接失败。到 **设置 → 插件 → 子智能体 → 运行限制**，把**最大递归深度改成 `2`** 并保存：
+>
+> ![把最大递归深度设为 2](docs/plugin-agent-depth.png)
+>
+> 并行的子智能体数量上限按机器核数给，4 核机器给 `8` 足够。
+
+装完**重启 Host**，再**刷新浏览器页面**加载界面部分。设置左栏会出现一个 **FathomKernel** 分区：
+
+![设置里的 FathomKernel 面板](docs/setting-fathomkernel.png)
+
+面板上是目标选择器、暂停/继续、打开报告、查看最优源码，以及轮次、基线、当前最优、加速比和里程碑判定。它**刻意只读**：创建、运行、恢复都在会话里让 Agent 做，页面上唯一能点的动作是暂停。
+
+### 卸载
+
+用完了再卸：
 
 ```bash
 dsh plugin --profile web remove @local/dsh-fathomkernel
 ```
 
-装完**重启 Host**，再**刷新浏览器页面**加载界面部分。设置里会出现一个 **FathomKernel** 分区。
+`~/.dsh/fathomkernel` 里的经验库和目标是独立目录，卸载不会删它们；要彻底清干净再手动删。
 
 ---
 
 ## 三步开始
 
-### 第一步：准备任务目录
+全程只需要说话。下面是一段真实会话。
 
-插件只认一个固定的目录名：**会话工作目录下的 `task/`**，也就是 `<会话工作目录>/task/`。所有任务文件都放这里。
+### 第一步：说你要什么
 
-**这一步可以交给 Agent 做。** 你直接说「我要优化 X」，Agent 会自己建 `task/`、写一份能跑但很慢的基线实现、配一条校验和一条测速，然后建 goal。下面三个文件是它该写出来的样子——你照着看一眼，就知道它写对了没有。
+![一句话开始](docs/fathomkernel-chat-prompt.png)
 
-```text
-demo/
-└── task/
-    ├── kernel.js      ← 要被优化的实现
-    ├── check.js       ← 校验：正确就退出码 0
-    └── bench.js       ← 测速：打印指标
-```
+开会话说一句就行，比如上图的「写 C 语言优化 2 个 512×512 矩阵的乘法」。你说完就能放手：Agent 会自己查环境、跑 `fk_doctor` 确认插件就绪、搭出**基线实现 + 校验命令 + 测速命令**，放进会话工作目录的 `task/`，然后建 goal。
 
-`kernel.js` —— 先写一个**直白、正确、不快**的版本。它就是基线：
-
-```js
-function sumSquares(values) {
-  let total = 0
-  for (let index = 0; index < values.length; index += 1) {
-    total += values[index] * values[index]
-  }
-  return total
-}
-module.exports = { sumSquares }
-```
-
-`check.js` —— 正确就退出码 0：
-
-```js
-const { sumSquares } = require('./kernel.js')
-if (sumSquares([1, 2, 3, 4, 5]) !== 55) process.exit(1)
-```
-
-`bench.js` —— 测速，**最后一行**打印一个 JSON：
-
-```js
-const { sumSquares } = require('./kernel.js')
-const values = new Float64Array(1 << 20).fill(1.5)
-sumSquares(values)
-const started = process.hrtime.bigint()
-for (let round = 0; round < 20; round += 1) sumSquares(values)
-const ms = Number(process.hrtime.bigint() - started) / 1e6 / 20
-console.log(JSON.stringify({ latency_ms: ms }))
-```
-
-> 换成 C、Python、Rust 或者你自己的构建脚本都行——把三条命令换成对应的命令即可。
-
-#### 让 Agent 代劳时，看一眼这三样
-
-插件只负责**测**，不负责判断你给的基准好不好。交给 Agent 写的话，值得扫一眼：
+插件只认 `<会话工作目录>/task/` 这一个位置，目录名固定。这一层通常不用你操心，但值得看一眼——**插件只负责测，不负责判断基准好不好**：
 
 | 看什么 | 怎么算不对 |
 |---|---|
@@ -127,48 +99,25 @@ console.log(JSON.stringify({ latency_ms: ms }))
 | **校验真的在验** | 只测一两个小输入，或者只比较长度——错误实现也能过 |
 | **测速真的在测** | 计时太短（几微秒）、没有预热、或者结果根本没被用上，测出来的是噪声或空转 |
 
-### 第二步：告诉 Agent 要优化什么
+换成 C、Python、Rust 或你自己的构建脚本都行，把这三条换成对应的命令即可。
 
-在 `demo/` 的上一级开会话，直接说话：
-
-> 用 FathomKernel 优化 demo 里的平方和，目标是快一倍。
-
-Agent 会去调 `fk_goal` 把这些填进去：
-
-```text
-fk_goal action=create
-  name="平方和"
-  workdir=demo
-  spec.language=javascript
-  spec.entry=kernel.js
-  spec.correctness="node check.js"
-  spec.benchmark="node bench.js"
-  spec.metric={"name":"latency_ms","path":"latency_ms","unit":"ms"}
-  spec.target={"kind":"speedup","value":2}
-```
-
-创建时它会立刻跑一遍基线并记下来：
-
-```text
-Milestone ladder: m0 → m1 → m2 → m3 → m4 → m5
-Baseline: 1.817 ms
-```
-
-`target` 里的 `2` 表示目标是**快一倍**。这些参数不用你手填，但知道有这么回事，和 Agent 说话时能说得更准。
-
-### 第三步：让它开跑
+### 第二步：让它跑
 
 > 开始跑吧，跑完告诉我。
 
-Agent 调 `fk_run`，后台开跑并立刻返回。想看进度就问一句，Agent 用 `fk_status` 给你看阶梯爬到哪一级、当前最快多少。想停就说停。
+Agent 调 `fk_run`，后台开跑并立刻返回。之后每一轮都是完整的一圈：挑一种改法 → 翻历史经验 → 提出新版本 → **真的编译、真的校验、反复测速取中位数** → 只有「正确且明显更快」才替换当前最优。
 
-进度看这条阶梯：
+进度看这条阶梯，看到 **m4** 就是目标达成，`m5` 表示还在继续往前推：
 
 ```text
 m0 编译 → m1 正确 → m2 基线 → m3 有效增益 → m4 达标 → m5 超越目标
 ```
 
-看到 **m4** 就说明你设的目标达成了。`m5` 表示它还在继续往前推。
+### 第三步：看结果
+
+![手写候选被实测接受，随后启动自主循环](docs/fathomkernel-chat.png)
+
+这是上图那段会话的后续：Agent 自己手写了一个快版本提交进去，插件真的编译、真的校验、真的测速，**5.18 ms 对基线 23.6 ms（4.56 倍）**，接受为新的最优，然后接着开自主循环继续找。全程不用你动手，问一句进度就能看，想停说停。
 
 ---
 
@@ -287,7 +236,7 @@ outputExtensions:
 
 ## 控制台
 
-设置里的 **FathomKernel** 分区是这套循环的仪表盘：
+设置里的 **FathomKernel** 分区是这套循环的仪表盘，上面装完插件那张图就是它：
 
 - 目标选择器；
 - 里程碑阶梯（走到哪一级）；
@@ -296,7 +245,7 @@ outputExtensions:
 - 当前的自进化策略；
 - 可浏览的经验库。
 
-控制台**刻意做成以展示为主**。循环由引擎负责，页面只呈现测到的事实。唯一能点的动作是「停止」——创建、运行、恢复、写经验都走对话里的工具。
+控制台**刻意做成以展示为主**。循环由引擎负责，页面只呈现测到的事实。唯一能点的动作是「暂停」——创建、运行、恢复、写经验都走对话里的工具。
 
 ---
 
