@@ -1,0 +1,28 @@
+# The FathomKernel bundle: one Host row owns the engine, its tools and the
+# authenticated dashboard routes. The browser half is carried by the same
+# package through `dsh.client`.
+#
+# No machine-specific path is configured on purpose. Durable state (goals,
+# knowledge base, meta-policy) lives in the per-user directory
+# `$DSH_HOME/fathomkernel` (falling back to `~/.dsh/fathomkernel`), so every
+# workspace and session shares one store. A goal follows its session working
+# directory unless `workdir` is given, and reads its harness from
+# `<workdir>/task/`. Set `stateDir` here only to move the store somewhere else;
+# the goal workdir has no config override on purpose.
+#
+# The row's schema is in `lib/config.js` and accepts exactly four keys:
+# `stateDir`, `maxKnowledgeEntries`, `resumeRunners` and `outputExtensions`. A
+# misspelled key fails activation instead of being silently ignored.
+- insert:
+    - id: fathomkernel
+      name: '@local/dsh-fathomkernel'
+      config:
+        # Same as the engine's default (see lib/engine.js, the
+        # `resumeRunners === true` check): a goal that was running when the Host
+        # stopped is not adopted automatically. Turn it on per profile.
+        resumeRunners: false
+        # Built-in JavaScript candidates are stored as `.mjs`; a task whose entry
+        # file is CommonJS (`.js` with `require`) gets `.cjs` instead so the
+        # candidate directory matches what every read asks for.
+        outputExtensions:
+          javascript: cjs

@@ -1,0 +1,12 @@
+# Dependencies (a link: install keeps none here, but a bundled one might)
+node_modules/
+
+# Runtime state, if a stateDir is ever pointed inside the checkout
+.fathomkernel/
+
+# Goal workdirs created while trying the plugin out
+forge-demo/
+
+# Test and tool scratch
+*.tgz
+*.log
